@@ -50,10 +50,10 @@ def save_video(out, title, mysqlcursor, mysqlconn):
 
     out.release()
     print('비디오를 release 했음.')
-    sql = "INSERT INTO videos (id, path, username,thumbnailpath) VALUES (%s, %s, %s,%s)"
-    val = (video_index, title, username,"dd")
-    mysqlcursor.execute(sql, val)
-    mysqlconn.commit()
+    # sql = "INSERT INTO videos (id, path, username,thumbnailpath) VALUES (%s, %s, %s,%s)"
+    # val = (video_index, title, username,"dd")
+    # mysqlcursor.execute(sql, val)
+    # mysqlconn.commit()
     video_index += 1
 
 def lane_detection(conn, feed):
@@ -161,6 +161,13 @@ def main():
 
     imgData = b''
 
+    while(True):
+        data = conn.recv(1024)
+        if data.find(b'user=') != -1:
+            username = data[data.find(b'user=') + 5:data.find(b'=userend')].decode("utf-8")
+            print("username : ", username + "\n")
+            break
+
     # DB 커넥션
     mysqlconn = pymysql.connect(host='127.0.0.1', user='admin', password='rla0204rb!', db='blackbox')
     mysqlcursor = mysqlconn.cursor()
@@ -169,6 +176,11 @@ def main():
     result = mysqlcursor.fetchone()
     video_index = result[0]+1
     print("videos테이블에 몇개 튜플 있는지 확인했어 : ", video_index)
+
+    sql = "INSERT INTO videos (id, path, username,thumbnailpath) VALUES (%s, %s, %s,%s)"
+    val = (video_index, title, username, "dd")
+    mysqlcursor.execute(sql, val)
+    mysqlconn.commit()
 
     with detection_graph.as_default():
       with tf.Session(graph=detection_graph) as sess:
@@ -184,23 +196,16 @@ def main():
                 lane_flag = False
                 data.strip(b'\x00\x05false')
 
-            if data.find(b'user=') != -1:
-               username = data[data.find(b'user=') + 5:data.find(b'=userend')].decode("utf-8")
-               print("username : ", username+"\n")
+            # if data.find(b'user=') != -1:
+            #    username = data[data.find(b'user=') + 5:data.find(b'=userend')].decode("utf-8")
+            #    print("username : ", username+"\n")
 
             if data.find(b'address=') != -1:
                try:
                    latitude, longitude = data[data.find(b'address=') + 8:data.find(b'=addressend')].decode("utf-8").split(',')
-                   print("latitude:", latitude)
-                   print("longitude:", longitude)
                except:
-                   print("-0--------------------------------------")
                    data += conn.recv(100)
                    latitude, longitude = data[data.find(b'address=') + 8:data.find(b'=addressend')].decode("utf-8").split(',')
-                   print("latitude:", latitude)
-                   print("longitude:", longitude)
-                   print("-0--------------------------------------")
-
 
             imgData += data
             a = imgData.find(b'\xff\xd8')
@@ -209,7 +214,7 @@ def main():
             if a != -1 and b != -1:
                 frame_count+=1
                 feed = cv2.imdecode(np.frombuffer(imgData[a:b + 2], dtype=np.uint8), 1)
-                if frame_count == 4:
+                if frame_count == 3:
                     frame_count=0
                     if lane_flag == True:
                         threading.Thread(target=lane_detection, args=(conn, feed, )).start()
@@ -232,6 +237,7 @@ def main():
                           feed_dict={image_tensor: image_np_expanded})
                       # Visualization of the results of a detection.
 
+
                     print("함수 넘기기 전이야. video_index랑 save_count는 ", video_index, save_count)
                     _, box_points = vis_util.visualize_boxes_and_labels_on_image_array(
                           feed,
@@ -244,23 +250,27 @@ def main():
                           title,
                           mysqlcursor,
                           mysqlconn,
+                          conn,
+                          latitude,
+                          longitude,
                           use_normalized_coordinates=True,
                           line_thickness=8,
                           )
 
-
-                    h, w = feed.shape[:2]
-                    if len(box_points) == 0:
-                        box_msg = "noobject\n"
-                        conn.send(box_msg.encode())
-                    elif len(box_points) > 0:
-                        box_msg = str(len(box_points)) + "\n"
-                        for i in box_points:
-                            box_msg += str(i[0] * h) + "\n"
-                            box_msg += str(i[1] * w) + "\n"
-                            box_msg += str(i[2] * h) + "\n"
-                            box_msg += str(i[3] * w) + "\n"
-                        conn.send(box_msg.encode())
+                    # h, w = feed.shape[:2]
+                    # print("---------------box")
+                    # print(box_points)
+                    # if len(box_points) == 0:
+                    #     box_msg = "noobject\n"
+                    #     conn.send(box_msg.encode())
+                    # elif len(box_points) > 0:
+                    #     box_msg = str(len(box_points)) + "\n"
+                    #     for i in box_points:
+                    #         box_msg += str(i[0] * h) + "\n"
+                    #         box_msg += str(i[1] * w) + "\n"
+                    #         box_msg += str(i[2] * h) + "\n"
+                    #         box_msg += str(i[3] * w) + "\n"
+                    #     conn.send(box_msg.encode())
 
                 save_count += 1
                 # VideoFileOutput.write(feed)
@@ -273,11 +283,16 @@ def main():
                 elif save_count == 60:
                     save_count = 0
                     save_title_num += 1
-                    threading.Thread(target=save_video, args=(out, title, mysqlcursor, mysqlconn)).start()
-                    # out.release()
-                    # print("release")
+                    #threading.Thread(target=save_video, args=(out, title, mysqlcursor, mysqlconn)).start()
+                    save_video(out,title,mysqlcursor,mysqlconn)
+
                     title = 'C:/Django/myblackbox/myapp/static/videos/' + time.strftime('%y%m%d_%H%M%S') + '.mp4'
                     out = cv2.VideoWriter(title, codec, 20.0, (1920, 1080))
+
+                    sql = "INSERT INTO videos (id, path, username,thumbnailpath) VALUES (%s, %s, %s,%s)"
+                    val = (video_index, title, username, "dd")
+                    mysqlcursor.execute(sql, val)
+                    mysqlconn.commit()
 
                 cv2.imshow('image', feed)
                 imgData = imgData[b + 2:]

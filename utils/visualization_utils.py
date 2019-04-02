@@ -571,6 +571,9 @@ def visualize_boxes_and_labels_on_image_array(
         video_path,
         mysqlcursor,
         mysqlconn,
+        conn,
+        latitude,
+        longitude,
         instance_masks=None,
         instance_boundaries=None,
         keypoints=None,
@@ -648,50 +651,112 @@ def visualize_boxes_and_labels_on_image_array(
     image_pil = Image.fromarray(np.uint8(image)).convert('RGB')
     im_width, im_height = image_pil.size
 
+    send_box=[]
     for i in range(min(max_boxes_to_draw, boxes.shape[0])):
         if scores is None or scores[i] > min_score_thresh:
             box = tuple(boxes[i].tolist())
+            send_box.append(box)
 
-            if instance_masks is not None:
-                box_to_instance_masks_map[box] = instance_masks[i]
-            if instance_boundaries is not None:
-                box_to_instance_boundaries_map[box] = instance_boundaries[i]
-            if keypoints is not None:
-                box_to_keypoints_map[box].extend(keypoints[i])
-            if scores is None:
-                box_to_color_map[box] = 'None'  # groundtruth_box_visualization_color
-            else:
-                display_str = ''
-                if not skip_labels:
-                    if not agnostic_mode:
-                        if classes[i] in category_index.keys():
-                            class_name = category_index[classes[i]]['name']
-                        else:
-                            class_name = 'N/A'
-                        display_str = str(class_name)
-                if not skip_scores:
-                    if not display_str:
-                        display_str = '{}%'.format(int(100 * scores[i]))
+    h, w = image.shape[:2]
+    if len(send_box) == 0:
+        box_msg = "noobject\n"
+        conn.send(box_msg.encode())
+    elif len(send_box) > 0:
+        box_msg = str(len(send_box)) + "\n"
+        for i in send_box:
+            box_msg += str(i[0] * h) + ","
+            box_msg += str(i[1] * w) + ","
+            box_msg += str(i[2] * h) + ","
+            box_msg += str(i[3] * w) + "\n"
+        conn.send(box_msg.encode())
+
+    for i in range(len(send_box)):
+        box = send_box[i]
+        if instance_masks is not None:
+            box_to_instance_masks_map[box] = instance_masks[i]
+        if instance_boundaries is not None:
+            box_to_instance_boundaries_map[box] = instance_boundaries[i]
+        if keypoints is not None:
+            box_to_keypoints_map[box].extend(keypoints[i])
+        if scores is None:
+            box_to_color_map[box] = 'None'  # groundtruth_box_visualization_color
+        else:
+            display_str = ''
+            if not skip_labels:
+                if not agnostic_mode:
+                    if classes[i] in category_index.keys():
+                        class_name = category_index[classes[i]]['name']
                     else:
-                        display_str = '{}: {}%'.format(display_str, int(100 * scores[i]))
-
-                color_bgr, color_name = detect_color(image, box, str(class_name))
-                locate, number_plate = detect_location(image, box, str(class_name))
-
-                box_to_display_str_map[box].append(display_str)
-                if agnostic_mode:
-                    box_to_color_map[box] = 'DarkOrange'
+                        class_name = 'N/A'
+                    display_str = str(class_name)
+            if not skip_scores:
+                if not display_str:
+                    display_str = '{}%'.format(int(100 * scores[i]))
                 else:
-                    box_to_color_map[box] = (color_name, color_bgr, locate)
-                    if save_count % 10 == 0:
-                        print("여기서 info 넣으려고 db 커넥트 할거야.")
-                        sql = "INSERT INTO infos (videoid, object, score, xmin, xmax, ymin, ymax, color, direction, numberplate, videopath,frame) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                        val = (video_index, str(class_name), int(100 * scores[i]), int(box[0] * im_width),
-                               int(box[2] * im_width), int(box[1] * im_height), int(box[3] * im_height), color_name,
-                               locate, number_plate, video_path, save_count)
-                        mysqlcursor.execute(sql, val)
-                        mysqlconn.commit()
-                        print("info를 위한 db 커넥트 종료")
+                    display_str = '{}: {}%'.format(display_str, int(100 * scores[i]))
+
+            color_bgr, color_name = detect_color(image, box, str(class_name))
+            locate, number_plate = detect_location(image, box, str(class_name))
+
+            box_to_display_str_map[box].append(display_str)
+            if agnostic_mode:
+                box_to_color_map[box] = 'DarkOrange'
+            else:
+                box_to_color_map[box] = (color_name, color_bgr, locate)
+                if save_count % 10 == 0:
+                    print("여기서 info 넣으려고 db 커넥트 할거야.")
+                    sql = "INSERT INTO infos (videoid, object, score, xmin, xmax, ymin, ymax, color, direction, numberplate, videopath,frame, latitude, longitude) " \
+                          "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                    val = (video_index, str(class_name), int(100 * scores[i]), int(box[0] * im_width),
+                           int(box[2] * im_width), int(box[1] * im_height), int(box[3] * im_height), color_name,
+                           locate, number_plate, video_path, save_count, latitude, longitude)
+                    mysqlcursor.execute(sql, val)
+                    mysqlconn.commit()
+                    print("info를 위한 db 커넥트 종료")
+
+    # for i in range(min(max_boxes_to_draw, boxes.shape[0])):
+    #     if scores is None or scores[i] > min_score_thresh:
+    #         box = tuple(boxes[i].tolist())
+    #         if instance_masks is not None:
+    #             box_to_instance_masks_map[box] = instance_masks[i]
+    #         if instance_boundaries is not None:
+    #             box_to_instance_boundaries_map[box] = instance_boundaries[i]
+    #         if keypoints is not None:
+    #             box_to_keypoints_map[box].extend(keypoints[i])
+    #         if scores is None:
+    #             box_to_color_map[box] = 'None'  # groundtruth_box_visualization_color
+    #         else:
+    #             display_str = ''
+    #             if not skip_labels:
+    #                 if not agnostic_mode:
+    #                     if classes[i] in category_index.keys():
+    #                         class_name = category_index[classes[i]]['name']
+    #                     else:
+    #                         class_name = 'N/A'
+    #                     display_str = str(class_name)
+    #             if not skip_scores:
+    #                 if not display_str:
+    #                     display_str = '{}%'.format(int(100 * scores[i]))
+    #                 else:
+    #                     display_str = '{}: {}%'.format(display_str, int(100 * scores[i]))
+    #
+    #             color_bgr, color_name = detect_color(image, box, str(class_name))
+    #             locate, number_plate = detect_location(image, box, str(class_name))
+    #
+    #             box_to_display_str_map[box].append(display_str)
+    #             if agnostic_mode:
+    #                 box_to_color_map[box] = 'DarkOrange'
+    #             else:
+    #                 box_to_color_map[box] = (color_name, color_bgr, locate)
+    #                 if save_count % 10 == 0:
+    #                     print("여기서 info 넣으려고 db 커넥트 할거야.")
+    #                     sql = "INSERT INTO infos (videoid, object, score, xmin, xmax, ymin, ymax, color, direction, numberplate, videopath,frame) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    #                     val = (video_index, str(class_name), int(100 * scores[i]), int(box[0] * im_width),
+    #                            int(box[2] * im_width), int(box[1] * im_height), int(box[3] * im_height), color_name,
+    #                            locate, number_plate, video_path, save_count)
+    #                     mysqlcursor.execute(sql, val)
+    #                     mysqlconn.commit()
+    #                     print("info를 위한 db 커넥트 종료")
 
     box_points = []
     for box, detect_info in box_to_color_map.items():
@@ -733,6 +798,7 @@ def visualize_boxes_and_labels_on_image_array(
                 # color='red',
                 radius=line_thickness / 2,
                 use_normalized_coordinates=use_normalized_coordinates)
+
     return image, box_points
 
 
