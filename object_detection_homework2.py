@@ -14,6 +14,7 @@ from socket import *
 import lane_detect
 import cv2
 import threading
+import asyncio
 import pymysql
 import datetime, time
 from socket import error as SocketError
@@ -34,9 +35,13 @@ frame_count=0
 username = None
 video_index = None
 
+latitude=0
+longitude=0
+weather=""
+
 title = 'C:/Django/myblackbox/myapp/static/videos/' + time.strftime('%y%m%d_%H%M%S') + '.mp4'
 codec = cv2.VideoWriter_fourcc(*'H264')  # fourcc stands for four character code
-out = cv2.VideoWriter(title, codec, 20.0, (1920, 1080))
+out = cv2.VideoWriter(title, codec, 10.0, (1920, 1080))
 
 #서버 부분 Fixme
 class SocketInfo():
@@ -45,7 +50,7 @@ class SocketInfo():
     BUFSIZE=1024
     ADDR=(HOST,PORT)
 
-def save_video(out, title, mysqlcursor, mysqlconn):
+async def save_video(out, title, mysqlcursor, mysqlconn):
     global video_index
 
     out.release()
@@ -104,7 +109,7 @@ def lane_detection(conn, feed):
 
 def main():
     # global prior_left_line, prior_right_line, left_fit_line, right_fit_line, i
-    global username, video_index , title, codec, out, frame_count
+    global username, video_index , title, codec, out, frame_count, latitude, longitude, weather
     # What model to download.
     MODEL_NAME = 'ssd_mobilenet_v1_coco_2017_11_17'
     MODEL_FILE = MODEL_NAME + '.tar.gz'
@@ -178,9 +183,10 @@ def main():
     print("videos테이블에 몇개 튜플 있는지 확인했어 : ", video_index)
 
     sql = "INSERT INTO videos (id, path, username,thumbnailpath) VALUES (%s, %s, %s,%s)"
-    val = (video_index, title, username, "dd")
+    val = (video_index, title, username, 'C:/Django/myblackbox/myapp/static/thumbnails/'+str(video_index)+'.jpg')
     mysqlcursor.execute(sql, val)
     mysqlconn.commit()
+    loop = asyncio.get_event_loop()
 
     with detection_graph.as_default():
       with tf.Session(graph=detection_graph) as sess:
@@ -196,16 +202,14 @@ def main():
                 lane_flag = False
                 data.strip(b'\x00\x05false')
 
-            # if data.find(b'user=') != -1:
-            #    username = data[data.find(b'user=') + 5:data.find(b'=userend')].decode("utf-8")
-            #    print("username : ", username+"\n")
-
             if data.find(b'address=') != -1:
                try:
                    latitude, longitude = data[data.find(b'address=') + 8:data.find(b'=addressend')].decode("utf-8").split(',')
+                   weather = data[data.find(b'weather=') + 8:data.find(b'=weatherend')].decode("utf-8")
                except:
                    data += conn.recv(100)
                    latitude, longitude = data[data.find(b'address=') + 8:data.find(b'=addressend')].decode("utf-8").split(',')
+                   weather = data[data.find(b'weather=') + 8:data.find(b'=weatherend')].decode("utf-8")
 
             imgData += data
             a = imgData.find(b'\xff\xd8')
@@ -253,6 +257,7 @@ def main():
                           conn,
                           latitude,
                           longitude,
+                          weather,
                           use_normalized_coordinates=True,
                           line_thickness=8,
                           )
@@ -274,23 +279,25 @@ def main():
 
                 save_count += 1
                 # VideoFileOutput.write(feed)
-                # if save_count == 0:
-                #     print("thumbnail start")
-                #     cv2.imwrite('C:/Django/myblackbox/myapp/static/thumbnails/'+str(video_index)+'.jpg', feed)
-                #     print("thumbnail finish")
-                if save_count < 60:
+                if save_count == 1:
+                    print("thumbnail start")
+                    cv2.imwrite('C:/Django/myblackbox/myapp/static/thumbnails/'+str(video_index)+'.jpg', feed)
+                    print("thumbnail finish")
+                out.write(feed)
+                if save_count == 300:
                     out.write(feed)
-                elif save_count == 60:
                     save_count = 0
                     save_title_num += 1
                     #threading.Thread(target=save_video, args=(out, title, mysqlcursor, mysqlconn)).start()
-                    save_video(out,title,mysqlcursor,mysqlconn)
+                    # save_video(out,title,mysqlcursor,mysqlconn)
+
+                    loop.run_until_complete(save_video(out,title,mysqlcursor,mysqlconn))
 
                     title = 'C:/Django/myblackbox/myapp/static/videos/' + time.strftime('%y%m%d_%H%M%S') + '.mp4'
-                    out = cv2.VideoWriter(title, codec, 20.0, (1920, 1080))
+                    out = cv2.VideoWriter(title, codec, 10.0, (1920, 1080))
 
                     sql = "INSERT INTO videos (id, path, username,thumbnailpath) VALUES (%s, %s, %s,%s)"
-                    val = (video_index, title, username, "dd")
+                    val = (video_index, title, username, "C:/Django/myblackbox/myapp/static/thumbnails/"+str(video_index)+".jpg")
                     mysqlcursor.execute(sql, val)
                     mysqlconn.commit()
 
@@ -304,6 +311,7 @@ def main():
 
                 if cv2.waitKey(25) & 0xFF == ord('q'):
                     break
+                    loop.close()
                     cv2.destroyAllWindows()
                     cap.release()
                     mysqlconn.close()
